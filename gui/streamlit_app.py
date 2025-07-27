@@ -2,17 +2,25 @@
 import streamlit as st
 import pandas as pd
 from core.strategy import calculate_bollinger_bands, generate_bollinger_signal
-from core.mock_websocket_client import get_ohlcv_df, start_kline_ws
+from core.apex_ws import get_ohlcv_df, preload_history, start_polling
 import time
 import threading
 import numpy as np
 from ta.momentum import RSIIndicator
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+
+if "wallet" not in st.session_state:
+    st.session_state.wallet = 1000.0
 
 # Start mock stream
-start_kline_ws("SOL-USDT")
+preload_history()
+start_polling()
 
 st.set_page_config(page_title="Neetechs BolliBot X", layout="wide")
-st.title("📊 Neetechs Bollinger Band Bot (Live View)")
+st.metric("💰 Wallet Balance (USD)", f"${st.session_state.wallet:.2f}")
 
 # Input fields
 st.sidebar.subheader("Bot Settings")
@@ -23,7 +31,13 @@ usd_to_sol = st.sidebar.number_input("USD to SOL Rate", value=150.0)
 rsi_upper = st.sidebar.slider("RSI Overbought (Sell Above)", 50, 90, value=70)
 rsi_lower = st.sidebar.slider("RSI Oversold (Buy Below)", 10, 50, value=30)
 
-start_bot = st.sidebar.button("▶️ Run Strategy")
+if "run_bot" not in st.session_state:
+    st.session_state.run_bot = False
+
+def toggle_bot():
+    st.session_state.run_bot = not st.session_state.run_bot
+
+st.sidebar.button("▶️ Start / 🛑 Stop Strategy", on_click=toggle_bot)
 
 placeholder = st.empty()
 status_box = st.sidebar.empty()
@@ -40,7 +54,7 @@ trade_history = []
 entry_logs = []
 exit_logs = []
 
-while start_bot:
+while st.session_state.run_bot:
     df = get_ohlcv_df()
     if len(df) < 21:
         placeholder.warning("Waiting for enough candles...")
@@ -65,8 +79,46 @@ while start_bot:
         st.subheader("Latest Candles")
         st.dataframe(df.tail(10).sort_values(by="timestamp", ascending=False))
 
-        st.subheader("Chart")
-        st.line_chart(df.set_index("timestamp")[['close', 'upper', 'lower']].tail(50))
+        st.subheader("Candlestick Chart")
+
+        last_df = df.tail(50)
+
+        fig = go.Figure()
+
+        # Candlesticks
+        fig.add_trace(go.Candlestick(
+            x=last_df['timestamp'],
+            open=last_df['open'],
+            high=last_df['high'],
+            low=last_df['low'],
+            close=last_df['close'],
+            name="Price"
+        ))
+
+        # Bollinger Bands
+        fig.add_trace(go.Scatter(
+            x=last_df['timestamp'],
+            y=last_df['upper'],
+            line=dict(color='rgba(0, 255, 0, 0.5)', width=1),
+            name='Upper Band'
+        ))
+        fig.add_trace(go.Scatter(
+            x=last_df['timestamp'],
+            y=last_df['lower'],
+            line=dict(color='rgba(255, 0, 0, 0.5)', width=1),
+            name='Lower Band'
+        ))
+
+        fig.update_layout(
+            xaxis_rangeslider_visible=False,
+            height=500,
+            margin=dict(t=30, b=20),
+            template="plotly_dark"
+        )
+
+        st.plotly_chart(fig, use_container_width=True, key=f"candles_{time.time()}")
+
+
 
         st.subheader("Current Status")
         st.write(f"**Last Close:** `{price:.2f}`")
@@ -86,6 +138,9 @@ while start_bot:
         entry_logs.append({"Action": "BUY" if signal == 'buy' else "SELL", "Price": price, "Time": entry_time})
 
     elif position == 'buy' and (price >= tp_price or price <= sl_price):
+        pnl = (price - entry_price) * qty * usd_to_sol
+        st.session_state.wallet += pnl
+
         result = {
             "Direction": "LONG",
             "Entry": entry_price,
@@ -93,6 +148,8 @@ while start_bot:
             "TP": tp_price,
             "SL": sl_price,
             "PnL %": round(((price - entry_price) / entry_price) * 100, 2),
+            "PnL $": round(pnl, 2),
+
             "Timestamp": latest['timestamp']
         }
         trade_history.append(result)
@@ -100,6 +157,9 @@ while start_bot:
         position = None
 
     elif position == 'sell' and (price <= tp_price or price >= sl_price):
+        pnl = (entry_price - price) * qty * usd_to_sol
+        st.session_state.wallet += pnl
+
         result = {
             "Direction": "SHORT",
             "Entry": entry_price,
@@ -107,6 +167,8 @@ while start_bot:
             "TP": tp_price,
             "SL": sl_price,
             "PnL %": round(((entry_price - price) / entry_price) * 100, 2),
+            "PnL $": round(pnl, 2),
+
             "Timestamp": latest['timestamp']
         }
         trade_history.append(result)
@@ -115,7 +177,17 @@ while start_bot:
 
     if trade_history:
         st.subheader("📜 Trade History")
-        st.dataframe(pd.DataFrame(trade_history[::-1]))
+
+        history_df = pd.DataFrame(trade_history[::-1])
+
+        def color_pnl(val):
+            if isinstance(val, (int, float)):
+                return "color: green" if val > 0 else "color: red"
+            return ""
+
+        styled_df = history_df.style.applymap(color_pnl, subset=["PnL %", "PnL $"])
+        st.dataframe(styled_df)
+
 
     if entry_logs or exit_logs:
         st.subheader("🧾 Entry/Exit Log")

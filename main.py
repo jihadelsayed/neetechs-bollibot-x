@@ -1,7 +1,7 @@
 from features.stop_loss_take_profit import calculate_tp_sl, should_exit
 from features.discord_alerts import send_alert
 from features.logger import log_trade
-from core.mock_websocket_client import start_kline_ws, get_ohlcv_df
+from core.apex_ws import preload_history, start_polling, get_ohlcv_df
 from core.trader import place_order
 from core.strategy import calculate_bollinger_bands, generate_bollinger_signal
 import time
@@ -11,7 +11,8 @@ entry_price = None
 tp_price = None
 sl_price = None
 
-start_kline_ws("SOL-USDT")
+preload_history()
+start_polling()
 
 while True:
     try:

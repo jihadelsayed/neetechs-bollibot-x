@@ -5,9 +5,12 @@ import random
 import time
 
 ohlcv = pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+lock = threading.Lock()
 
 def get_ohlcv_df():
-    return ohlcv.copy()
+    with lock:
+        return ohlcv.copy()
+
 
 def start_kline_ws(symbol="SOL-USDT", interval="1m"):
     def mock_stream():
@@ -20,17 +23,24 @@ def start_kline_ws(symbol="SOL-USDT", interval="1m"):
             else:
                 now = ohlcv.iloc[-1]["timestamp"] + timedelta(minutes=1)
 
+            # Preload 20 mock candles efficiently
+            rows = []
             for i in range(20):
                 ts = now - timedelta(minutes=20 - i)
                 price = 150 + random.uniform(-2, 2)
-                ohlcv.loc[len(ohlcv)] = {
-                    "timestamp": ts,
-                    "open": price,
-                    "high": price + 0.3,
-                    "low": price - 0.3,
-                    "close": price,
-                    "volume": random.uniform(50, 250)
-                }
+                rows.append([
+                    ts,
+                    float(price),
+                    float(price + 0.3),
+                    float(price - 0.3),
+                    float(price),
+                    float(random.uniform(50, 250))
+                ])
+
+            with lock:
+                ohlcv = pd.concat([ohlcv, pd.DataFrame(rows, columns=ohlcv.columns)])
+
+
             price = base_price + random.uniform(-1.5, 1.5)
             high = price + random.uniform(0.1, 0.5)
             low = price - random.uniform(0.1, 0.5)
@@ -66,12 +76,13 @@ def start_kline_ws(symbol="SOL-USDT", interval="1m"):
 
 
 
-            if not ohlcv.empty and ohlcv.iloc[-1]["timestamp"] == row["timestamp"]:
-                ohlcv.iloc[-1] = row
-            else:
-                ohlcv = pd.concat([ohlcv, pd.DataFrame([row], columns=ohlcv.columns)])
+            with lock:
+                if not ohlcv.empty and ohlcv.iloc[-1]["timestamp"] == row["timestamp"]:
+                    ohlcv.iloc[-1] = row
+                else:
+                    ohlcv = pd.concat([ohlcv, pd.DataFrame([row], columns=ohlcv.columns)])
+                    ohlcv = ohlcv.tail(100)
 
-                ohlcv = ohlcv.tail(100)
 
             print("🔥 MOCK candle:", row)
             time.sleep(1)  # Feed every 5s to simulate rapid testing
