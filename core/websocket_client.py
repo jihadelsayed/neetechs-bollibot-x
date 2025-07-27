@@ -1,59 +1,67 @@
-import websocket
+import asyncio
+import websockets
 import json
-import threading
 import pandas as pd
 from datetime import datetime
+import threading
+import time
 
-ohlcv_df = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-
-def on_message(ws, message):
-    global ohlcv_df
-    data = json.loads(message)
-
-    kline = data['k']
-    timestamp = datetime.fromtimestamp(kline['t'] / 1000)
-    open_price = float(kline['o'])
-    high = float(kline['h'])
-    low = float(kline['l'])
-    close = float(kline['c'])
-    volume = float(kline['v'])
-
-    new_row = {
-        'timestamp': timestamp,
-        'open': open_price,
-        'high': high,
-        'low': low,
-        'close': close,
-        'volume': volume
-    }
-
-    # Update last row or append
-    if not ohlcv_df.empty and ohlcv_df.iloc[-1]['timestamp'] == timestamp:
-        ohlcv_df.iloc[-1] = new_row
-    else:
-        ohlcv_df = pd.concat([ohlcv_df, pd.DataFrame([new_row])])
-        if len(ohlcv_df) > 100:
-            ohlcv_df = ohlcv_df.iloc[-100:]
-
-def on_error(ws, error):
-    print("WebSocket Error:", error)
-
-def on_close(ws, close_status_code, close_msg):
-    print("WebSocket Closed")
-
-def on_open(ws):
-    print("✅ WebSocket Connected")
-
-def start_kline_ws(symbol="solusdt", interval="1m"):
-    url = f"wss://stream.binance.com:9443/ws/{symbol}@kline_{interval}"
-    ws = websocket.WebSocketApp(url,
-                                 on_message=on_message,
-                                 on_error=on_error,
-                                 on_close=on_close,
-                                 on_open=on_open)
-    thread = threading.Thread(target=ws.run_forever)
-    thread.daemon = True
-    thread.start()
+ohlcv = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
 def get_ohlcv_df():
-    return ohlcv_df.copy()
+    return ohlcv.copy()
+
+def start_kline_ws(symbol="SOL-USDT", interval="1m"):
+    def run_loop():
+        asyncio.run(_run_ws(symbol, interval))
+
+    t = threading.Thread(target=run_loop)
+    t.daemon = True
+    t.start()
+
+async def _run_ws(symbol="SOL-USDT", interval="1m"):
+    global ohlcv
+    uri = "wss://api.omni.apex.exchange/ws/v3"
+
+    while True:
+        try:
+            async with websockets.connect(uri) as ws:
+                sub_msg = {
+                    "type": "subscribe",
+                    "channel": "candles",
+                    "instId": symbol,
+                    "interval": interval
+                }
+                await ws.send(json.dumps(sub_msg))
+                print(f"✅ Subscribed to {symbol} candles @ {interval}")
+
+                async for msg in ws:
+                    print("📥 RAW MSG:", msg)
+                    try:
+                        data = json.loads(msg)
+
+                        if data.get("channel") == "candles" and "data" in data:
+                            candle = data["data"]
+                            row = {
+                                "timestamp": datetime.fromtimestamp(candle["start"] / 1000),
+                                "open": float(candle["open"]),
+                                "high": float(candle["high"]),
+                                "low": float(candle["low"]),
+                                "close": float(candle["close"]),
+                                "volume": float(candle["volume"]),
+                            }
+
+                            if not ohlcv.empty and ohlcv.iloc[-1]['timestamp'] == row['timestamp']:
+                                ohlcv.iloc[-1] = row
+                            else:
+                                ohlcv = pd.concat([ohlcv, pd.DataFrame([row])])
+                                ohlcv = ohlcv.tail(100)
+
+                            print("📈 Candle received:", row)
+
+                    except Exception as e:
+                        print("❌ Parse error:", e)
+
+        except Exception as e:
+            print("❌ WebSocket error:", e)
+            await asyncio.sleep(5)

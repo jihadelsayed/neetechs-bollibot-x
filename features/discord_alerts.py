@@ -1,17 +1,10 @@
-
 import os
-from discord_webhook import DiscordWebhook
-
-webhook_url = os.getenv("DISCORD_WEBHOOK")
+import requests
 
 def send_alert(message):
-    if not webhook_url:
-        print("⚠️ Discord webhook not set.")
-        return
-
-    try:
-        webhook = DiscordWebhook(url=webhook_url, content=message)
-        response = webhook.execute()
-        print("📢 Discord alert sent.")
-    except Exception as e:
-        print("❌ Failed to send Discord alert:", e)
+    webhook_url = os.getenv("DISCORD_WEBHOOK")
+    if webhook_url:
+        try:
+            requests.post(webhook_url, json={"content": message})
+        except Exception as e:
+            print(f"❌ Discord alert failed: {e}")

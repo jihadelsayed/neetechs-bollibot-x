@@ -1,24 +1,24 @@
+import pandas as pd
+
+def calculate_bollinger_bands(df, period=20, stddev=2):
+    df['ma'] = df['close'].rolling(window=period).mean()
+    df['std'] = df['close'].rolling(window=period).std()
+    df['upper'] = df['ma'] + stddev * df['std']
+    df['lower'] = df['ma'] - stddev * df['std']
+    return df
+
 def generate_bollinger_signal(df):
-    """
-    Generates signal based on last candle.
-    Returns: 'buy', 'sell', 'exit', or None
-    """
-    if len(df) < 2:
+    if len(df) < 20:
         return None
 
-    last = df.iloc[-1]
-    prev = df.iloc[-2]
+    close = df['close'].iloc[-1]
+    upper = df['upper'].iloc[-1]
+    lower = df['lower'].iloc[-1]
 
-    # Entry signals
-    if last['close'] > last['upper_band'] and prev['close'] <= prev['upper_band']:
-        return 'sell'
-    elif last['close'] < last['lower_band'] and prev['close'] >= prev['lower_band']:
+    # Signal logic
+    if close < lower:
         return 'buy'
-
-    # Exit signals (return to SMA)
-    elif prev['close'] < prev['sma'] and last['close'] >= last['sma']:
-        return 'exit_long'
-    elif prev['close'] > prev['sma'] and last['close'] <= last['sma']:
-        return 'exit_short'
-
-    return None
+    elif close > upper:
+        return 'sell'
+    else:
+        return None
